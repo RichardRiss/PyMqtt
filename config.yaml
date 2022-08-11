@@ -1,0 +1,41 @@
+﻿DeviceName: "Fake_CX"
+UpdateTime: 0.5 #Unit 1s
+Broker:
+    IP: "pihole.fritz.box"
+    Port: 1883
+    User:
+    Password:
+PLC:
+    AMSNETID: "192.168.178.57.1.1"
+    Mode : TC3
+Data_TC2: #In TC2 only Memmory Variables are supported. f.e. MD4088 -> Offset 4088, Type: DINT
+    - Command:
+        Offset: 4088
+        Datatype: "UDINT"
+        DisplayName: "Kommando"
+        Unit: '°C'
+        ReadOnly: true
+        MinValue: 0
+        MaxValue: 255
+Data_TC3: #In TC3 only the destination string is needed. Like Main.bTest or GVL.udiRunTime
+    - Command:
+        Path: "DOOCS_IF.Command"
+        DisplayName: "Kommando"
+        Unit: "°C"
+        ReadOnly: false
+        MinValue: 0
+        MaxValue: 4
+    - LED:
+        Path: "DOOCS_IF.bLED"
+        DisplayName: "LED"
+        Unit: ""
+        ReadOnly: false
+        MinValue: 
+        MaxValue:
+    - Sollposition:
+        Path: "DOOCS_IF.diSollposition"
+        DisplayName: "Sollposition"
+        Unit: "mm"
+        ReadOnly: false
+        MinValue:
+        MaxValue:
