@@ -33,9 +33,9 @@ class YamlHandler:
     self.updatetime = None
     self.mode = None
     self.devname = None
-    self.value = None
-    self.ret_val = None
-    self.key = None
+    self._value = None
+    self._ret_val = None
+    self._key = None
     if getattr(sys, 'frozen', False):
       self.src_folder = os.path.dirname(sys.executable)
     else:
@@ -43,25 +43,25 @@ class YamlHandler:
     self.src_path = self.src_folder + "\\config.yaml"
 
   def read(self, key):
-    self.key = key
+    self._key = key
     with open(self.src_path, 'r', encoding='UTF-8-sig') as f:
-      self.ret_val = yaml.safe_load(f)
-      if self.ret_val is None:
+      self._ret_val = yaml.safe_load(f)
+      if self._ret_val is None:
         return False
       else:
         try:
-          return self.ret_val[key]
+          return self._ret_val[self._key]
         except KeyError:
           logging.error("Broken Key in Yaml File. Delete " + self.src_path + " and retry.")
 
   def add(self, key, value):
     try:
       assert key
-      self.key = key
-      self.value = value
+      self._key = key
+      self._value = value
       with open(self.src_path, 'r') as f:
         yaml_cont = yaml.safe_load(f) or {}
-      yaml_cont[self.key] = self.value
+      yaml_cont[self._key] = self._value
       with open(self.src_path, 'w') as f:
         yaml.dump(yaml_cont, f)
     except:
@@ -145,11 +145,38 @@ class Broker:
       self.client.publish(f'//{self.devname}/TcIotCommunicator/Messages/{i}', payload=json.dumps(''), qos=2, retain=True)
     self.notifcounter = 1
 
+
 class PLC:
-  def __init__(self, amsnetid: str, mode: str):
+  _datatype = {
+    'BOOL': pyads.PLCTYPE_BOOL,
+    'BIT': pyads.PLCTYPE_BOOL,
+    'BYTE': pyads.PLCTYPE_BYTE,
+    'DATA': pyads.PLCTYPE_DATE,
+    'DINT': pyads.PLCTYPE_DINT,
+    'DT': pyads.PLCTYPE_DT,
+    'DWORD': pyads.PLCTYPE_DWORD,
+    'INT': pyads.PLCTYPE_INT,
+    'LREAL': pyads.PLCTYPE_LREAL,
+    'REAL': pyads.PLCTYPE_REAL,
+    'SINT': pyads.PLCTYPE_SINT,
+    'STRING': pyads.PLCTYPE_STRING,
+    'WSTRING': pyads.PLCTYPE_WSTRING,
+    'TIME': pyads.PLCTYPE_TIME,
+    'TOD': pyads.PLCTYPE_TOD,
+    'UDINT': pyads.PLCTYPE_UDINT,
+    'UINT': pyads.PLCTYPE_UINT,
+    'USINT': pyads.PLCTYPE_USINT,
+    'WORD': pyads.PLCTYPE_WORD
+  }
+
+  def __init__(self, amsnetid: str, mode: str, mqttbroker: Broker):
+    self._symdict = {}
+    self._data = []
+    self.datasym = []
+    self._datapoints = []
     self.connected = False
     self.mode = mode
-    self.data = []
+    self._broker = mqttbroker
     self.error = 0
     self.amsnetid = amsnetid
     if self.mode == 'TC2':
@@ -158,24 +185,46 @@ class PLC:
       self.plc = pyads.Connection(self.amsnetid, pyads.PORT_TC3PLC1)
     self.plc.open()
 
-
-  def check_connection(self, mqttbroker: Broker):
+  def check_connection(self):
     self.connected = False
     if not self.plc.is_open:
       self.plc.open()
     while not self.connected:
       try:
         self.plc.read_state()
-        mqttbroker.clear_notification()
-        mqttbroker.send_notification(f'Successfully established connection to {self.mode} PLC {self.amsnetid}')
+        self._broker.clear_notification()
+        self._broker.send_notification(f'Successfully established connection to {self.mode} PLC {self.amsnetid}')
         self.connected = True
       except pyads.ADSError:
-        mqttbroker.send_notification(f'Unable to establish connection to {self.mode} PLC {self.amsnetid}')
+        self._broker.send_notification(f'Unable to establish connection to {self.mode} PLC {self.amsnetid}')
         logging.info(f'Unable to establish connection to {self.mode} PLC {self.amsnetid}')
         time.sleep(5)
 
   def create_sym_links(self, data: list = []):
-    self.data = data
+    self._data = data
+    self.datasym = []
+    for _var in self._data:
+      self._symdict = {}
+      try:
+        if self.mode == 'TC2':
+          if isinstance(_var.get('Offset'), int) and _var.get('Datatype') in self._datatype:
+            self._symdict = _var.copy()
+            self._symdict['symlink'] = self.plc.get_symbol(
+              index_group=pyads.INDEXGROUP_MEMORYBIT if _var.get('Datatype') in ['BOOL', 'BIT'] else pyads.INDEXGROUP_MEMORYBYTE,
+              index_offset=_var.get('Offset'),
+              plc_datatype=self._datatype.get(_var.get('Datatype')))
+            self.datasym.append(self._symdict)
+        elif self.mode == 'TC3':
+          if isinstance(_var.get("Path"), str):
+            self._symdict = _var.copy()
+            self._symdict['symlink'] = self.plc.get_symbol(_var.get('Path'))
+            self.datasym.append(self._symdict)
+
+      except:
+        logging.error(f"Unable to create SymLink to {_var.get('DisplayName')}.")
+        continue
+
+    return self.datasym
 
 
 def init_logging():
@@ -207,6 +256,7 @@ def main():
     logging.error("Error occurred with yaml Config File.")
     logging.error(f'{sys.exc_info()[1]}')
     logging.error(f'Error on line {sys.exc_info()[-1].tb_lineno}')
+    exit(-10)
 
   try:
     # Create MQTT Connection
@@ -217,18 +267,33 @@ def main():
     logging.error("Error on Connection with local MQTT Broker")
     logging.error(f'{sys.exc_info()[1]}')
     logging.error(f'Error on line {sys.exc_info()[-1].tb_lineno}')
+    exit(-20)
 
   try:
     # Establish Connection to PLC
-    controller = PLC(cfg.plc.get("AMSNETID"), cfg.plc.get('Mode'))
-    controller.check_connection(mqttbroker)
-
-
-
+    controller = PLC(cfg.plc.get("AMSNETID"), cfg.plc.get('Mode'), mqttbroker)
+    controller.check_connection()
+    # Create symbolic Links to Data -> ignore invalid
+    symlist = controller.create_sym_links(cfg.val)
   except:
-    logging.error("Error on Connection with local MQTT Broker")
+    logging.error("Error on Connection with Controller.")
     logging.error(f'{sys.exc_info()[1]}')
     logging.error(f'Error on line {sys.exc_info()[-1].tb_lineno}')
+
+  try:
+    # Start timed Thread which reads plc -> pushes to broker
+    pass
+
+  except:
+    logging.error("Error on Cyclic Communication.")
+    logging.error(f'{sys.exc_info()[1]}')
+    logging.error(f'Error on line {sys.exc_info()[-1].tb_lineno}')
+
+
+
+
+
+
 
   exit()
   bLamp1 = False
