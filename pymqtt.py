@@ -8,6 +8,8 @@ import paho.mqtt.client as mqtt
 import sys
 import pyads
 import yaml
+import threading
+from queue import Queue
 
 '''
 ToDo: 
@@ -83,6 +85,8 @@ class YamlHandler:
 
 
 class Broker:
+  _msg_offline = {"Online": False}
+
   def __init__(self, param: dict = None, devname: str = 'Controller'):
     self.msg_offline = None
     self.msg_online = None
@@ -103,7 +107,7 @@ class Broker:
       self.client.connect(self.param.get("IP"), port=self.param.get("Port"), keepalive=60)
       self.client.loop_start()
       self.client.publish(f'//{self.devname}/TcIotCommunicator/Desc', payload=json.dumps(self.online_message()), qos=2, retain=True)
-      self.client.will_set(f'//{self.devname}/TcIotCommunicator/Desc', payload=json.dumps(self.offline_message()), qos=2, retain=True)
+      self.client.will_set(f'//{self.devname}/TcIotCommunicator/Desc', payload=json.dumps(self._msg_offline), qos=2, retain=True)
       self.clear_notification()
 
     except:
@@ -119,11 +123,7 @@ class Broker:
     self.client.subscribe(f'//{self.devname}/TcIotCommunicator/Json/Rx/Data')
 
   def on_disconnect(self):
-    self.client.publish(f'//{self.devname}/TcIotCommunicator/Desc', payload=json.dumps(self.offline_message()), qos=2, retain=True)
-
-  def offline_message(self):
-    self.msg_offline = {"Online": False}
-    return self.msg_offline
+    self.client.publish(f'//{self.devname}/TcIotCommunicator/Desc', payload=json.dumps(self._msg_offline), qos=2, retain=True)
 
   def online_message(self):
     self.msg_online = {"Timestamp": datetime.datetime.now().strftime('%Y-%m-%dT%H:%M:%S.%f'), "Online": True}
@@ -147,6 +147,10 @@ class Broker:
 
 
 class PLC:
+  _isWin = False
+  if os.name == 'nt':
+    _isWin = True
+
   _datatype = {
     'BOOL': pyads.PLCTYPE_BOOL,
     'BIT': pyads.PLCTYPE_BOOL,
@@ -169,7 +173,7 @@ class PLC:
     'WORD': pyads.PLCTYPE_WORD
   }
 
-  def __init__(self, amsnetid: str, mode: str, mqttbroker: Broker):
+  def __init__(self, amsnetid: str, ip: str, mode: str, mqttbroker: Broker):
     self._symdict = {}
     self._data = []
     self.datasym = []
@@ -179,10 +183,16 @@ class PLC:
     self._broker = mqttbroker
     self.error = 0
     self.amsnetid = amsnetid
+    self._port = None
+    self._ip = None
     if self.mode == 'TC2':
-      self.plc = pyads.Connection(self.amsnetid, 800)
+      self._port = 800
     elif self.mode == 'TC3':
-      self.plc = pyads.Connection(self.amsnetid, pyads.PORT_TC3PLC1)
+      self._port = pyads.PORT_TC3PLC1
+    if self._isWin:
+      self.plc = pyads.Connection(self.amsnetid, self._port)
+    else:
+      self.plc = pyads.Connection(self.amsnetid, self._port, self._ip)
     self.plc.open()
 
   def check_connection(self):
@@ -225,6 +235,50 @@ class PLC:
         continue
 
     return self.datasym
+
+
+class TimedThread:
+  #Limit parallel Threads
+  _jobs = Queue()
+  for i in range(10):
+    _jobs.put(i)
+
+  def __init__(self, interval, mqttbroker: Broker, symlist: list):
+    self._timer = None
+    self.interval = interval
+    self.broker = mqttbroker
+    self.symlist = symlist.copy()
+    self._symlink = None
+    self._is_running = False
+    self._start_time = time.time()
+
+  def _run(self):
+    _value = self._jobs.get()
+    print(_value)
+    self._is_running = False
+    self.fetchdata()
+    self.publishdata()
+    self._jobs.task_done()
+
+  def start(self):
+    if not self._is_running and not self._jobs.empty():
+      self._start_time += self.interval
+      self._timer = threading.Timer(self._start_time - time.time(), self._run)
+      self._timer.start()
+      self._is_running = True
+
+  def stop(self):
+    self._timer.cancel()
+    self._is_running = False
+
+  def fetchdata(self):
+    for _val in self.symlist:
+      self._symlink: pyads.AdsSymbol = _val['symlink']
+      _val['value'] = self._symlink.read()
+
+  def publishdata(self):
+    pass
+
 
 
 def init_logging():
@@ -271,7 +325,7 @@ def main():
 
   try:
     # Establish Connection to PLC
-    controller = PLC(cfg.plc.get("AMSNETID"), cfg.plc.get('Mode'), mqttbroker)
+    controller = PLC(cfg.plc.get("AMSNETID"), cfg.plc.get("IP"), cfg.plc.get('Mode'), mqttbroker)
     controller.check_connection()
     # Create symbolic Links to Data -> ignore invalid
     symlist = controller.create_sym_links(cfg.val)
@@ -282,18 +336,15 @@ def main():
 
   try:
     # Start timed Thread which reads plc -> pushes to broker
-    pass
+    tr = TimedThread(cfg.updatetime, mqttbroker, symlist)
+    while True:
+      tr.start()
+
 
   except:
     logging.error("Error on Cyclic Communication.")
     logging.error(f'{sys.exc_info()[1]}')
     logging.error(f'Error on line {sys.exc_info()[-1].tb_lineno}')
-
-
-
-
-
-
 
   exit()
   bLamp1 = False

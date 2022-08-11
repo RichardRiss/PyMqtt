@@ -9,8 +9,9 @@ Broker:
     Password:
 
 PLC:
-    AMSNETID: "192.168.178.200.1.1"
-    Mode : TC2
+    IP: "192.168.178.57"  # Only needed if script runs from linux device
+    AMSNETID: "192.168.178.57.1.1"
+    Mode : TC3
 
 Data_TC2: #In TC2 only Memmory Variables are supported. f.e. MD4088 -> Offset 4088, Type: DINT
   - DisplayName: "Kommando"
