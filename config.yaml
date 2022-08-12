@@ -17,33 +17,33 @@ Data_TC2: #In TC2 only Memmory Variables are supported. f.e. MD4088 -> Offset 40
   - DisplayName: "Kommando"
     Offset: 4088
     Datatype: "UDINT"
-    Unit: '°C'
-    ReadOnly: true
-    MinValue: 0
-    MaxValue: 255
-    DecimalPrecision:
+    iot.Unit: '°C'
+    iot.ReadOnly: true
+    iot.MinValue: 0
+    iot.MaxValue: 255
+    iot.DecimalPrecision:
     
 Data_TC3: #In TC3 only the destination string is needed. Like Main.bTest or GVL.udiRunTime
   - DisplayName: "Kommando"
     Path: "DOOCS_IF.Command"
-    Unit: "°C"
-    ReadOnly: false
-    MinValue: 0
-    MaxValue: 4
-    DecimalPrecision:
+    iot.Unit: "°C"
+    iot.ReadOnly: false
+    iot.MinValue: 0
+    iot.MaxValue: 4
+    iot.DecimalPrecision:
 
   - DisplayName: "LED"
     Path: "DOOCS_IF.bLED"
-    Unit: ""
-    ReadOnly: false
-    MinValue: 
-    MaxValue:
-    DecimalPrecision:
+    iot.Unit: ""
+    iot.ReadOnly: false
+    iot.MinValue: 
+    iot.MaxValue:
+    iot.DecimalPrecision:
 
   - DisplayName: "Sollposition"
     Path: "DOOCS_IF.diSollposition"
-    Unit: "mm"
-    ReadOnly: false
-    MinValue:
-    MaxValue:
-    DecimalPrecision:
+    iot.Unit: "mm"
+    iot.ReadOnly: false
+    iot.MinValue:
+    iot.MaxValue:
+    iot.DecimalPrecision:

@@ -106,7 +106,7 @@ class Broker:
       self.client.on_message = self.on_message
       self.client.connect(self.param.get("IP"), port=self.param.get("Port"), keepalive=60)
       self.client.loop_start()
-      self.client.publish(f'//{self.devname}/TcIotCommunicator/Desc', payload=json.dumps(self.online_message()), qos=2, retain=True)
+      self.set_online()
       self.client.will_set(f'//{self.devname}/TcIotCommunicator/Desc', payload=json.dumps(self._msg_offline), qos=2, retain=True)
       self.clear_notification()
 
@@ -119,11 +119,15 @@ class Broker:
     print('Topic:' + msg.topic + " Payload: " + str(msg.payload))
 
   def on_connect(self, client, userdata, flags, rc):
-    logging.info("Connected with result code " + str(rc))
+    logging.info(f"Device {self.devname} connected to Broker with result code " + str(rc))
     self.client.subscribe(f'//{self.devname}/TcIotCommunicator/Json/Rx/Data')
 
   def on_disconnect(self):
     self.client.publish(f'//{self.devname}/TcIotCommunicator/Desc', payload=json.dumps(self._msg_offline), qos=2, retain=True)
+    logging.info(f"Device {self.devname} disconnected from Broker.")
+
+  def set_online(self):
+    self.client.publish(f'//{self.devname}/TcIotCommunicator/Desc', payload=json.dumps(self.online_message()), qos=2, retain=True)
 
   def online_message(self):
     self.msg_online = {"Timestamp": datetime.datetime.now().strftime('%Y-%m-%dT%H:%M:%S.%f'), "Online": True}
@@ -191,8 +195,10 @@ class PLC:
       self._port = pyads.PORT_TC3PLC1
     if self._isWin:
       self.plc = pyads.Connection(self.amsnetid, self._port)
+      self.plc.set_timeout(3000)
     else:
       self.plc = pyads.Connection(self.amsnetid, self._port, self._ip)
+      self.plc.set_timeout(3000)
     self.plc.open()
 
   def check_connection(self):
@@ -209,6 +215,8 @@ class PLC:
         self._broker.send_notification(f'Unable to establish connection to {self.mode} PLC {self.amsnetid}')
         logging.info(f'Unable to establish connection to {self.mode} PLC {self.amsnetid}')
         time.sleep(5)
+      finally:
+        return self.connected
 
   def create_sym_links(self, data: list = []):
     self._data = data
@@ -238,47 +246,73 @@ class PLC:
 
 
 class TimedThread:
-  #Limit parallel Threads
+  # Limit parallel Threads
   _jobs = Queue()
   for i in range(10):
     _jobs.put(i)
 
-  def __init__(self, interval, mqttbroker: Broker, symlist: list):
+  def __init__(self, interval, mqttbroker: Broker, symlist: list, plc: PLC):
     self._timer = None
     self.interval = interval
     self.broker = mqttbroker
     self.symlist = symlist.copy()
+    self.plc = plc
     self._symlink = None
     self._is_running = False
     self._start_time = time.time()
+    self.send_msg = {}
+    self._connected = True
 
   def _run(self):
-    _value = self._jobs.get()
-    print(_value)
+    self._jobnr = self._jobs.get()
+    if self._jobs.empty():
+      self.broker.send_notification('Job queue reached its limit! Consider reducing the update time.')
+      logging.error('Job queue reached limit. Update time to small')
     self._is_running = False
     self.fetchdata()
     self.publishdata()
     self._jobs.task_done()
+    self._jobs.put_nowait(self._jobnr)
 
   def start(self):
-    if not self._is_running and not self._jobs.empty():
+    if not self._is_running and not self._jobs.empty() and self._connected:
       self._start_time += self.interval
       self._timer = threading.Timer(self._start_time - time.time(), self._run)
       self._timer.start()
       self._is_running = True
+    elif not self._connected:
+      logging.info(f'Trying to reconnected to controller {self.plc.amsnetid}')
+      self._connected = self.plc.check_connection()
+      if self._connected:
+        logging.info(f'Successfully reconnected to controller {self.plc.amsnetid}')
+        self.broker.set_online()
+        self._start_time = time.time()
 
   def stop(self):
     self._timer.cancel()
     self._is_running = False
 
   def fetchdata(self):
-    for _val in self.symlist:
-      self._symlink: pyads.AdsSymbol = _val['symlink']
-      _val['value'] = self._symlink.read()
+    try:
+      for _val in self.symlist:
+        self._symlink: pyads.AdsSymbol = _val['symlink']
+        _val['value'] = self._symlink.read()
+      self._connected = True
+    except pyads.ADSError:
+      self.broker.send_notification('Connection to PLC lost. Trying to reestablish connection.')
+      logging.info('Connection to PLC lost. Trying to reestablish connection.')
+      self.broker.on_disconnect()
+      self._connected = False
 
   def publishdata(self):
-    pass
-
+    if self._connected:
+      self.send_msg = {
+        'Timestamp': datetime.datetime.now().strftime('%Y-%m-%dT%H:%M:%S.%f'),
+        'GroupName': self.broker.devname,
+        'Values': {var['DisplayName']: var['value'] for var in self.symlist},
+        'Metadata': {var['DisplayName']: {k: v for (k, v) in var.items() if k.startswith('iot.') and v is not None} for var in self.symlist}
+      }
+      self.broker.client.publish(f"//{self.broker.devname}/TcIotCommunicator/Json/Tx/Data", payload=json.dumps(self.send_msg), qos=0, retain=True)
 
 
 def init_logging():
@@ -333,34 +367,26 @@ def main():
     logging.error("Error on Connection with Controller.")
     logging.error(f'{sys.exc_info()[1]}')
     logging.error(f'Error on line {sys.exc_info()[-1].tb_lineno}')
+    mqttbroker.client.loop_stop()
+    mqttbroker.client.disconnect()
+    exit(-30)
 
   try:
     # Start timed Thread which reads plc -> pushes to broker
-    tr = TimedThread(cfg.updatetime, mqttbroker, symlist)
+    tr = TimedThread(cfg.updatetime, mqttbroker, symlist, controller)
     while True:
       tr.start()
-
 
   except:
     logging.error("Error on Cyclic Communication.")
     logging.error(f'{sys.exc_info()[1]}')
     logging.error(f'Error on line {sys.exc_info()[-1].tb_lineno}')
+    exit(-40)
 
   exit()
   bLamp1 = False
   bLamp2 = False
   nTemp = 0.0
-
-  send_msg = {
-    'Timestamp': "2022-08-08T21:52:32.166",
-    'GroupName': "Fake_CX8190",
-    "Values": {"bLamp1": False, "bLamp2": False, "nTemp": 0.0},
-    "MetaData": {"bLamp1": {"iot.DisplayName": "Kitchen Lights"},
-                 "bLamp2": {"iot.DisplayName": "Living Room Lights"},
-                 "nTemp": {"iot.DisplayName": "Outside Temperature",
-                           "iot.Unit": "Celsius", "iot.ReadOnly": "true",
-                           "iot.MinValue": "5", "iot.MaxValue": "30"}}
-  }
 
   try:
     while True:
