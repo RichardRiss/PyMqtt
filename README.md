@@ -8,9 +8,10 @@ Beckhoff TwinCAT IoT Communicator App.
 All implemented IoT Options (name, unit, limits) are configurable.
 
 ToDo:
- - write values back from app to controller
+ - write values back from app to controller -> done
  - create QR Code on runup -> maybe for an e-ink display
  - broker and controller security
  - setup pi as wifi host
  - implement arrays/structs 
+ - ability to connect to multiple devices
 

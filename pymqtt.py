@@ -12,9 +12,12 @@ import threading
 from queue import Queue
 
 '''
-ToDo: 
-Find Way to log error -> maybe through MTQQ Object 
-What to do on connection loss -> Restart with step 2?
+ToDo:
+write values back from app to controller
+create QR Code on runup -> maybe for an e-ink display
+broker and controller security
+setup pi as wifi host
+implement arrays/structs
 
 1. Read Yaml File
 2. Create MQTT Connection
@@ -88,6 +91,7 @@ class Broker:
   _msg_offline = {"Online": False}
 
   def __init__(self, param: dict = None, devname: str = 'Controller'):
+    self.msg = None
     self.msg_offline = None
     self.msg_online = None
     self.notif = None
@@ -96,6 +100,7 @@ class Broker:
     self.notifmax = 255
     self.message = ''
     self.param = param
+    self._symlist = None
 
     try:
       self.client = mqtt.Client()
@@ -116,7 +121,17 @@ class Broker:
       logging.error(f'Error on line {sys.exc_info()[-1].tb_lineno}')
 
   def on_message(self, client, userdata, msg):
-    print('Topic:' + msg.topic + " Payload: " + str(msg.payload))
+    logging.info('Topic:' + msg.topic + " Payload: " + str(msg.payload))
+    self.msg = json.loads(msg.payload)
+    if isinstance(self.symlist,list) and isinstance(self.msg.get('Values'), dict):
+      for _key, _val in self.msg.get('Values').items():
+        for _sym in self.symlist:
+          if _key == _sym.get('DisplayName') and isinstance(_sym.get('symlink'), pyads.AdsSymbol):
+            _symlink: pyads.AdsSymbol = _sym.get('symlink')
+            _symlink.write(_val)
+            logging.info(f'{_sym.get("DisplayName")} set to value {_val}.')
+            self.send_notification(f'{_sym.get("DisplayName")} set to value {_val}.')
+
 
   def on_connect(self, client, userdata, flags, rc):
     logging.info(f"Device {self.devname} connected to Broker with result code " + str(rc))
@@ -128,6 +143,18 @@ class Broker:
 
   def set_online(self):
     self.client.publish(f'//{self.devname}/TcIotCommunicator/Desc', payload=json.dumps(self.online_message()), qos=2, retain=True)
+
+  @property
+  def symlist(self):
+    return self._symlist
+
+  @symlist.setter
+  def symlist(self, symlist:list):
+    self._symlist = symlist
+
+  @symlist.deleter
+  def symlist(self):
+    self._symlist = None
 
   def online_message(self):
     self.msg_online = {"Timestamp": datetime.datetime.now().strftime('%Y-%m-%dT%H:%M:%S.%f'), "Online": True}
@@ -363,6 +390,8 @@ def main():
     controller.check_connection()
     # Create symbolic Links to Data -> ignore invalid
     symlist = controller.create_sym_links(cfg.val)
+    # Give Broker Write Access
+    mqttbroker.symlist = symlist
   except:
     logging.error("Error on Connection with Controller.")
     logging.error(f'{sys.exc_info()[1]}')
@@ -374,6 +403,7 @@ def main():
   try:
     # Start timed Thread which reads plc -> pushes to broker
     tr = TimedThread(cfg.updatetime, mqttbroker, symlist, controller)
+    logging.info(f'Starting Cyclic Operation on device {cfg.devname}')
     while True:
       tr.start()
 

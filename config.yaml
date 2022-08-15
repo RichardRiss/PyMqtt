@@ -35,7 +35,7 @@ Data_TC3: #In TC3 only the destination string is needed. Like Main.bTest or GVL.
   - DisplayName: "LED"
     Path: "DOOCS_IF.bLED"
     iot.Unit: ""
-    iot.ReadOnly: false
+    iot.ReadOnly: true
     iot.MinValue: 
     iot.MaxValue:
     iot.DecimalPrecision:
