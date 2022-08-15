@@ -13,7 +13,7 @@ from queue import Queue
 
 '''
 ToDo:
-write values back from app to controller
+write values back from app to controller -> done
 create QR Code on runup -> maybe for an e-ink display
 broker and controller security
 setup pi as wifi host
@@ -32,6 +32,7 @@ implement arrays/structs
 
 class YamlHandler:
   def __init__(self):
+    self.struct = None
     self.val = None
     self.plc = None
     self.broker = None
@@ -83,6 +84,7 @@ class YamlHandler:
       self.val = self.read("Data_TC2")
     elif self.plc.get('Mode') == "TC3":
       self.val = self.read("Data_TC3")
+      self.struct = self.read("Struct")
     else:
       raise KeyError
 
@@ -123,7 +125,7 @@ class Broker:
   def on_message(self, client, userdata, msg):
     logging.info('Topic:' + msg.topic + " Payload: " + str(msg.payload))
     self.msg = json.loads(msg.payload)
-    if isinstance(self.symlist,list) and isinstance(self.msg.get('Values'), dict):
+    if isinstance(self.symlist, list) and isinstance(self.msg.get('Values'), dict):
       for _key, _val in self.msg.get('Values').items():
         for _sym in self.symlist:
           if _key == _sym.get('DisplayName') and isinstance(_sym.get('symlink'), pyads.AdsSymbol):
@@ -131,7 +133,6 @@ class Broker:
             _symlink.write(_val)
             logging.info(f'{_sym.get("DisplayName")} set to value {_val}.')
             self.send_notification(f'{_sym.get("DisplayName")} set to value {_val}.')
-
 
   def on_connect(self, client, userdata, flags, rc):
     logging.info(f"Device {self.devname} connected to Broker with result code " + str(rc))
@@ -149,7 +150,7 @@ class Broker:
     return self._symlist
 
   @symlist.setter
-  def symlist(self, symlist:list):
+  def symlist(self, symlist: list):
     self._symlist = symlist
 
   @symlist.deleter
@@ -205,6 +206,7 @@ class PLC:
   }
 
   def __init__(self, amsnetid: str, ip: str, mode: str, mqttbroker: Broker):
+    self._struct = None
     self._symdict = {}
     self._data = []
     self.datasym = []
@@ -245,8 +247,9 @@ class PLC:
       finally:
         return self.connected
 
-  def create_sym_links(self, data: list = []):
+  def create_sym_links(self, data: list = None, struct: dict = None):
     self._data = data
+    self._struct = struct
     self.datasym = []
     for _var in self._data:
       self._symdict = {}
@@ -260,13 +263,20 @@ class PLC:
               plc_datatype=self._datatype.get(_var.get('Datatype')))
             self.datasym.append(self._symdict)
         elif self.mode == 'TC3':
-          if isinstance(_var.get("Path"), str):
+          if _var.get('isStruct'):
+            _struct = self._struct.get(_var.get("DisplayName"))
+            _struct_def = tuple((i.get('DisplayName'), self._datatype.get(i.get('Datatype')), 1) for i in _struct.get('Content'))
+            self._symdict = _var | _struct
+            self._symdict['symlink'] = self.plc.get_symbol(_struct.get('Path'), structure_def=_struct_def, array_size=_struct.get('Arraysize'))
+            self.datasym.append(self._symdict)
+          elif isinstance(_var.get("Path"), str):
             self._symdict = _var.copy()
             self._symdict['symlink'] = self.plc.get_symbol(_var.get('Path'))
             self.datasym.append(self._symdict)
-
       except:
         logging.error(f"Unable to create SymLink to {_var.get('DisplayName')}.")
+        logging.error(f'{sys.exc_info()[1]}')
+        logging.error(f'Error on line {sys.exc_info()[-1].tb_lineno}')
         continue
 
     return self.datasym
@@ -389,7 +399,7 @@ def main():
     controller = PLC(cfg.plc.get("AMSNETID"), cfg.plc.get("IP"), cfg.plc.get('Mode'), mqttbroker)
     controller.check_connection()
     # Create symbolic Links to Data -> ignore invalid
-    symlist = controller.create_sym_links(cfg.val)
+    symlist = controller.create_sym_links(cfg.val, cfg.struct)
     # Give Broker Write Access
     mqttbroker.symlist = symlist
   except:

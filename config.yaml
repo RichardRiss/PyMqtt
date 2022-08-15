@@ -1,49 +1,76 @@
-﻿DeviceName: "Fake_Controller"
+﻿DeviceName: Fake_Controller
 
 UpdateTime: 0.5 #Unit 1s
 
 Broker:
-    IP: "pihole.fritz.box"
+    IP: pihole.fritz.box
     Port: 1883
     User:
     Password:
 
 PLC:
-    IP: "192.168.178.57"  # Only needed if script runs from linux device
-    AMSNETID: "192.168.178.57.1.1"
+    IP: 192.168.178.57  # Only needed if script runs from linux device
+    AMSNETID: 192.168.178.57.1.1
     Mode : TC3
 
 Data_TC2: #In TC2 only Memmory Variables are supported. f.e. MD4088 -> Offset 4088, Type: DINT
-  - DisplayName: "Kommando"
+  - DisplayName: Kommando
     Offset: 4088
-    Datatype: "UDINT"
-    iot.Unit: '°C'
+    Datatype: UDINT
+    iot.Unit: °C
     iot.ReadOnly: true
     iot.MinValue: 0
     iot.MaxValue: 255
     iot.DecimalPrecision:
     
 Data_TC3: #In TC3 only the destination string is needed. Like Main.bTest or GVL.udiRunTime
-  - DisplayName: "Kommando"
-    Path: "DOOCS_IF.Command"
-    iot.Unit: "°C"
+  - DisplayName: Kommando
+    Path: MAIN.stData.Command
+    isStruct: false
+    iot.Unit: °C
     iot.ReadOnly: false
     iot.MinValue: 0
     iot.MaxValue: 4
     iot.DecimalPrecision:
 
-  - DisplayName: "LED"
-    Path: "DOOCS_IF.bLED"
-    iot.Unit: ""
+  - DisplayName: LED
+    Path: MAIN.stData.bLED
+    isStruct: false
+    iot.Unit:
     iot.ReadOnly: true
     iot.MinValue: 
     iot.MaxValue:
     iot.DecimalPrecision:
 
-  - DisplayName: "Sollposition"
-    Path: "DOOCS_IF.diSollposition"
-    iot.Unit: "mm"
+  - DisplayName: Sollposition
+    Path: MAIN.stData.diSollposition
+    isStruct: false
+    iot.Unit: mm
     iot.ReadOnly: false
     iot.MinValue:
     iot.MaxValue:
     iot.DecimalPrecision:
+    
+  - DisplayName: Motor
+    Path:
+    isStruct: true
+    iot.Unit:
+    iot.ReadOnly:
+    iot.MinValue:
+    iot.MaxValue:
+    iot.DecimalPrecision:
+    
+Struct: # not supported by TC2 Option
+    Motor:
+        Arraysize: 3        # if element is a struct set to 1, if Array of Struct set to Arraysize 
+        Path: MAIN.stData.arr
+        Content:  # keep same order as on plc side
+        - DisplayName: Command
+          Datatype: INT
+        
+        - DisplayName: LED
+          Datatype: BOOL
+        
+        - DisplayName: Sollposition
+          Datatype: DINT
+        
