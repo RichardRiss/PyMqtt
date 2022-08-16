@@ -54,11 +54,7 @@ Data_TC3: #In TC3 only the destination string is needed. Like Main.bTest or GVL.
   - DisplayName: Motor
     Path:
     isStruct: true
-    iot.Unit:
-    iot.ReadOnly:
-    iot.MinValue:
-    iot.MaxValue:
-    iot.DecimalPrecision:
+
     
 Struct: # not supported by TC2 Option
     Motor:
@@ -67,10 +63,25 @@ Struct: # not supported by TC2 Option
         Content:  # keep same order as on plc side
         - DisplayName: Command
           Datatype: INT
+          iot.Unit:
+          iot.ReadOnly: false
+          iot.MinValue:
+          iot.MaxValue:
+          iot.DecimalPrecision:
         
         - DisplayName: LED
           Datatype: BOOL
+          iot.Unit:
+          iot.ReadOnly: true
+          iot.MinValue:
+          iot.MaxValue:
+          iot.DecimalPrecision:
         
         - DisplayName: Sollposition
           Datatype: DINT
+          iot.Unit: °C
+          iot.ReadOnly: false
+          iot.MinValue:
+          iot.MaxValue:
+          iot.DecimalPrecision:
         

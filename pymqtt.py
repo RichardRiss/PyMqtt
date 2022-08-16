@@ -206,6 +206,7 @@ class PLC:
   }
 
   def __init__(self, amsnetid: str, ip: str, mode: str, mqttbroker: Broker):
+    self._symlist = None
     self._struct = None
     self._symdict = {}
     self._data = []
@@ -247,7 +248,7 @@ class PLC:
       finally:
         return self.connected
 
-  def create_sym_links(self, data: list = None, struct: dict = None):
+  def create_sym_links(self, data: list = None, struct: dict = None) -> list:
     self._data = data
     self._struct = struct
     self.datasym = []
@@ -268,7 +269,8 @@ class PLC:
             _struct_def = tuple((i.get('DisplayName'), self._datatype.get(i.get('Datatype')), 1) for i in _struct.get('Content'))
             self._symdict = _var | _struct
             self._symdict['symlink'] = self.plc.get_symbol(_struct.get('Path'), structure_def=_struct_def, array_size=_struct.get('Arraysize'))
-            self.datasym.append(self._symdict)
+            self._symlist = self.flatten(self._symdict)
+            self.datasym.extend(self._symlist)
           elif isinstance(_var.get("Path"), str):
             self._symdict = _var.copy()
             self._symdict['symlink'] = self.plc.get_symbol(_var.get('Path'))
@@ -278,8 +280,28 @@ class PLC:
         logging.error(f'{sys.exc_info()[1]}')
         logging.error(f'Error on line {sys.exc_info()[-1].tb_lineno}')
         continue
-
     return self.datasym
+
+  def flatten(self, symdict: dict) -> list:
+    _sym: pyads.AdsSymbol = symdict.get('symlink')
+    _symlist = []
+    if _sym is None:
+      return _symlist
+
+    _reg_match = _sym._regex_array.match(_sym.symbol_type)
+    if _reg_match is not None:
+      _groups = _reg_match.groups()
+      _end = int(_groups[1])
+      _start = int(_groups[0])
+      _struct_def = _sym.structure_def
+      _array_size = 1
+      _metadata = {var['DisplayName']: {k: v for (k, v) in var.items() if k.startswith('iot.') and v is not None} for var in symdict.get('Content')}
+      for _ in range(_start, _end + 1):
+        _tempdict = {'DisplayName': symdict.get('DisplayName') + f'[{_}]', 'path': _sym.name + f'[{_}]', 'isStruct': symdict.get('isStruct'), 'struct': _struct_def}
+        _tempdict['symlink'] = self.plc.get_symbol(_tempdict['path'], structure_def=_struct_def, array_size=_array_size)
+        _tempdict['metadata'] = _metadata
+        _symlist.append(_tempdict)
+    return _symlist
 
 
 class TimedThread:
