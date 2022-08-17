@@ -10,6 +10,7 @@ import pyads
 import yaml
 import threading
 from queue import Queue
+
 try:
   from pyroute2 import iproute
 except ImportError:
@@ -377,9 +378,20 @@ class TimedThread:
         'Timestamp': datetime.datetime.now().strftime('%Y-%m-%dT%H:%M:%S.%f'),
         'GroupName': self.broker.devname,
         'Values': {var['DisplayName']: var['value'] for var in self.symlist},
-        'Metadata': {var['DisplayName']: {k: v for (k, v) in var.items() if k.startswith('iot.') and v is not None} for var in self.symlist}
+        'Metadata': self.metagen(self.symlist)
       }
       self.broker.client.publish(f"//{self.broker.devname}/TcIotCommunicator/Json/Tx/Data", payload=json.dumps(self.send_msg), qos=0, retain=True)
+      logging.debug(f'send data: \n {self.send_msg}')
+
+  def metagen(self, _symlist: list) -> dict:
+    _retdict = {}
+    for var in _symlist:
+      if var.get('isStruct'):
+        for sub in var.get('metadata'):
+          _retdict[f'{var.get("DisplayName")}.{sub}'] = var.get('metadata')[sub]
+      else:
+        _retdict[var.get('DisplayName')] = {k: v for (k, v) in var.items() if k.startswith('iot.') and v is not None}
+    return _retdict
 
 
 def init_logging():
@@ -409,6 +421,7 @@ def device_config(ip: str, plc: dict):
   ipr = iproute.IPRoute()
   index = ipr.link_lookup(ifname='eth0')[0]
   ipr.addr('add', index, address=ethip, mask=int(mask))
+  logging.info(f'device address set to {ethip}/{mask}')
   ipr.close()
 
 
