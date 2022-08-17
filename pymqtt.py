@@ -10,6 +10,12 @@ import pyads
 import yaml
 import threading
 from queue import Queue
+try:
+  from pyroute2 import iproute
+except ImportError:
+  pass
+except AttributeError:
+  pass
 
 '''
 ToDo:
@@ -32,6 +38,7 @@ implement arrays/structs
 
 class YamlHandler:
   def __init__(self):
+    self.eth_ip = None
     self.struct = None
     self.val = None
     self.plc = None
@@ -80,6 +87,7 @@ class YamlHandler:
     self.updatetime = self.read("UpdateTime")
     self.broker = self.read("Broker")
     self.plc = self.read("PLC")
+    self.eth_ip = self.read("ETH-IP")
     if self.plc.get('Mode') == "TC2":
       self.val = self.read("Data_TC2")
     elif self.plc.get('Mode') == "TC3":
@@ -392,12 +400,39 @@ def init_logging():
     ])
 
 
+def device_config(ip: str, plc: dict):
+  if ip is None:
+    ethip = '.'.join(plc.get('IP').split('.')[0:-1]) + '.1'
+    mask = 24
+  else:
+    ethip, mask = ip.split('/')
+  ipr = iproute.IPRoute()
+  index = ipr.link_lookup(ifname='eth0')[0]
+  ipr.addr('add', index, address=ethip, mask=int(mask))
+  ipr.close()
+
+
+def is_raspi():
+  _ret = False
+  try:
+    with open('/sys/firmware/devicetree/base/model', 'r', encoding='UTF-8-sig') as f:
+      if 'raspberry pi' in f.read().lower():
+        _ret = True
+  except Exception as e:
+    pass
+  logging.info(f'Script running on raspberry pi: {_ret}')
+  return _ret
+
+
 def main():
   init_logging()
   try:
     # Read Yaml File
     cfg = YamlHandler()
     cfg.get_data()
+    # Set device configuration
+    if is_raspi():
+      device_config(cfg.eth_ip, cfg.plc)
 
   except:
     logging.error("Error occurred with yaml Config File.")
@@ -444,21 +479,6 @@ def main():
     logging.error(f'{sys.exc_info()[1]}')
     logging.error(f'Error on line {sys.exc_info()[-1].tb_lineno}')
     exit(-40)
-
-  exit()
-  bLamp1 = False
-  bLamp2 = False
-  nTemp = 0.0
-
-  try:
-    while True:
-      client.publish("test/Fake_CX8190/TcIotCommunicator/Json/Tx/Data", payload=json.dumps(send_msg), qos=0, retain=True)
-      time.sleep(1)
-  except KeyboardInterrupt:
-    client.publish("test/Fake_CX8190/TcIotCommunicator/Desc", payload=json.dumps(msg_offline), qos=2, retain=False)
-    time.sleep(1)
-    #  client.loop_stop()
-    client.disconnect()
 
 
 if __name__ == '__main__':

@@ -2,8 +2,10 @@
 
 UpdateTime: 0.5 #Unit 1s
 
+ETH-IP: 192.168.178.56/24   # static address for connection to plc, if None PLC IP X.X.X.1 is used 
+
 Broker:
-    IP: pihole.fritz.box
+    IP: pihole.fritz.box    # localhost
     Port: 1883
     User:
     Password:
