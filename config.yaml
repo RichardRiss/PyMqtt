@@ -1,6 +1,6 @@
 ﻿DeviceName: Fake_Controller
 
-UpdateTime: 0.5 #Unit 1s
+UpdateTime: 1.0 #Unit 1s
 
 ETH-IP: 192.168.178.56/24   # static address for connection to plc, if None PLC IP X.X.X.1 is used 
 
@@ -58,13 +58,13 @@ Data_TC3: #In TC3 only the destination string is needed. Like Main.bTest or GVL.
     isStruct: true
 
     
-Struct: # not supported by TC2 Option
+Struct: # not supported by TC2 Option, in TC3 {attribute 'pack_mode' := '1'} must be set in Struct
     Motor:
         Arraysize: 3        # if element is a struct set to 1, if Array of Struct set to Arraysize 
         Path: MAIN.stData.arr
         Content:  # keep same order as on plc side
         - DisplayName: Command
-          Datatype: INT
+          Datatype: DINT
           iot.Unit:
           iot.ReadOnly: false
           iot.MinValue:
@@ -82,6 +82,14 @@ Struct: # not supported by TC2 Option
         - DisplayName: Sollposition
           Datatype: DINT
           iot.Unit: °C
+          iot.ReadOnly: false
+          iot.MinValue:
+          iot.MaxValue:
+          iot.DecimalPrecision:
+          
+        - DisplayName: bTemp
+          Datatype: BOOL
+          iot.Unit:
           iot.ReadOnly: false
           iot.MinValue:
           iot.MaxValue:

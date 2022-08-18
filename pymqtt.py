@@ -132,16 +132,28 @@ class Broker:
       logging.error(f'Error on line {sys.exc_info()[-1].tb_lineno}')
 
   def on_message(self, client, userdata, msg):
-    logging.info('Topic:' + msg.topic + " Payload: " + str(msg.payload))
-    self.msg = json.loads(msg.payload)
-    if isinstance(self.symlist, list) and isinstance(self.msg.get('Values'), dict):
-      for _key, _val in self.msg.get('Values').items():
-        for _sym in self.symlist:
-          if _key == _sym.get('DisplayName') and isinstance(_sym.get('symlink'), pyads.AdsSymbol):
-            _symlink: pyads.AdsSymbol = _sym.get('symlink')
-            _symlink.write(_val)
-            logging.info(f'{_sym.get("DisplayName")} set to value {_val}.')
-            self.send_notification(f'{_sym.get("DisplayName")} set to value {_val}.')
+    try:
+      logging.info('Topic:' + msg.topic + " Payload: " + str(msg.payload))
+      self.msg = json.loads(msg.payload)
+      if isinstance(self.symlist, list) and isinstance(self.msg.get('Values'), dict):
+        for _key, _val in self.msg.get('Values').items():
+          for _sym in (_sym for _sym in self.symlist if isinstance(_sym.get('symlink'), pyads.AdsSymbol)):
+            if _key == _sym.get('DisplayName'):
+              _symlink: pyads.AdsSymbol = _sym.get('symlink')
+              _symlink.write(_val)
+              logging.debug(f'{_key} set to value {_val}.')
+              self.send_notification(f'{_key} set to value {_val}.')
+            elif _key.split('.')[0] == _sym.get('DisplayName'):
+              subkey = _key.split('.')[1]
+              _symlink: pyads.AdsSymbol = _sym.get('symlink')
+              _symlink.value[subkey] = _val
+              _symlink.write()
+              logging.debug(f'{_key} set to value {_val}.')
+              self.send_notification(f'{_key} set to value {_val}.')
+    except:
+      logging.debug(f'{sys.exc_info()[1]}')
+      logging.debug(f'Error on line {sys.exc_info()[-1].tb_lineno}')
+      self.client.subscribe(f'//{self.devname}/TcIotCommunicator/Json/Rx/Data')
 
   def on_connect(self, client, userdata, flags, rc):
     logging.info(f"Device {self.devname} connected to Broker with result code " + str(rc))
@@ -378,14 +390,14 @@ class TimedThread:
         'Timestamp': datetime.datetime.now().strftime('%Y-%m-%dT%H:%M:%S.%f'),
         'GroupName': self.broker.devname,
         'Values': {var['DisplayName']: var['value'] for var in self.symlist},
-        'Metadata': self.metagen(self.symlist)
+        'Metadata': self.metagen()
       }
       self.broker.client.publish(f"//{self.broker.devname}/TcIotCommunicator/Json/Tx/Data", payload=json.dumps(self.send_msg), qos=0, retain=True)
       logging.debug(f'send data: \n {self.send_msg}')
 
-  def metagen(self, _symlist: list) -> dict:
+  def metagen(self) -> dict:
     _retdict = {}
-    for var in _symlist:
+    for var in self.symlist:
       if var.get('isStruct'):
         for sub in var.get('metadata'):
           _retdict[f'{var.get("DisplayName")}.{sub}'] = var.get('metadata')[sub]
