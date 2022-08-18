@@ -10,9 +10,11 @@ import pyads
 import yaml
 import threading
 from queue import Queue
+import qrcode
 
 try:
   from pyroute2 import iproute
+  import papirus
 except ImportError:
   pass
 except AttributeError:
@@ -24,7 +26,7 @@ write values back from app to controller -> done
 create QR Code on runup -> maybe for an e-ink display
 broker and controller security
 setup pi as wifi host
-implement arrays/structs
+implement arrays/structs -> done
 
 1. Read Yaml File
 2. Create MQTT Connection
@@ -449,6 +451,44 @@ def is_raspi():
   return _ret
 
 
+def create_qr(info: dict) -> None:
+  try:
+    _rot = 0
+    _path = './code.bmp'
+    _ip = info.get("IP", "")
+    _port = info.get("Port", "1883")
+    _topic = "/"
+    _user = info.get("User", "")
+    if _user is None:
+      _user = ""
+    _pw = info.get("Password", "")
+    if _pw is None:
+      _pw = ""
+    _data = f'https://www.desy.de/app?&broker={_ip}&port={_port}&topic={_topic}&user={_user}&password={_pw}'
+
+    # Create image
+    qr = qrcode.QRCode(
+      version=1,
+      error_correction=qrcode.constants.ERROR_CORRECT_L,
+      box_size=5,
+      border=2,
+    )
+    qr.add_data(_data)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    img.save(_path)
+
+    # Show on PaPiRus Display
+    screen = papirus.Papirus(rotation=_rot)
+    screen.display(_path)
+    screen.update()
+
+  except:
+    logging.error("Unable to create QR Code")
+    logging.error(f'{sys.exc_info()[1]}')
+    logging.error(f'Error on line {sys.exc_info()[-1].tb_lineno}')
+
+
 def main():
   init_logging()
   try:
@@ -458,6 +498,7 @@ def main():
     # Set device configuration
     if is_raspi():
       device_config(cfg.eth_ip, cfg.plc)
+      create_qr(cfg.broker)
 
   except:
     logging.error("Error occurred with yaml Config File.")
