@@ -4,9 +4,11 @@ import json
 import logging
 import time
 import os
+
 import paho.mqtt.client as mqtt
 import sys
 import pyads
+import pyroute2.netlink
 import yaml
 import threading
 from queue import Queue
@@ -14,6 +16,7 @@ import qrcode
 
 try:
   from pyroute2 import iproute
+  import ipaddr
   import papirus
 except ImportError:
   pass
@@ -38,6 +41,8 @@ implement arrays/structs -> done
 8. Listen to write attempts
 '''
 
+_wlan0_ip = '192.168.1.1'
+_wlan0_mask = 24
 
 class YamlHandler:
   def __init__(self):
@@ -56,7 +61,7 @@ class YamlHandler:
       self.src_folder = os.path.dirname(sys.executable)
     else:
       self.src_folder = os.path.dirname(os.path.abspath(__file__))
-    self.src_path = self.src_folder + "\\config.yaml"
+    self.src_path = os.path.join(self.src_folder,"config.yaml")
 
   def read(self, key):
     self._key = key
@@ -421,7 +426,7 @@ def init_logging():
     level=log_level,
     force=True,
     handlers=[
-      logging.FileHandler(filename=f'{folder}\\debug.log', mode='w', encoding='utf-8'),
+      logging.FileHandler(filename=os.path.join(folder,'debug.log'), mode='w', encoding='utf-8'),
       logging.StreamHandler(sys.stdout)
     ])
 
@@ -432,11 +437,20 @@ def device_config(ip: str, plc: dict):
     mask = 24
   else:
     ethip, mask = ip.split('/')
-  ipr = iproute.IPRoute()
-  index = ipr.link_lookup(ifname='eth0')[0]
-  ipr.addr('add', index, address=ethip, mask=int(mask))
-  logging.info(f'device address set to {ethip}/{mask}')
-  ipr.close()
+  with iproute.IPRoute() as ipr:
+    index = ipr.link_lookup(ifname='eth0')[0]
+    _wifi = ipaddr.IPNetwork(f'{_wlan0_ip}/{_wlan0_mask}')
+    _eth = ipaddr.IPNetwork(f'{ethip}/{mask}')
+    if not _wifi.overlaps(_eth):
+      try:
+        # sudo setcap cap_net_admin,cap_net_raw+eip /usr/bin/python3.9
+        ipr.addr('add', index, address=ethip, mask=int(mask))
+        logging.info(f'device address set to {ethip}/{mask}')
+      except pyroute2.netlink.NetlinkError as e:
+        if e.code == 17:
+          logging.info(f'Tryed to set device IP to {ethip}. Address is already used.')
+    else:
+      logging.info(f'address conflict between eth0({ethip} and wlan0({_wlan0_ip}). Ethernet IP was not set.)')
 
 
 def is_raspi():
@@ -480,8 +494,9 @@ def create_qr(info: dict) -> None:
 
     # Show on PaPiRus Display
     screen = papirus.Papirus(rotation=_rot)
-    screen.display(_path)
-    screen.update()
+    image = papirus.PapirusImage(rotation=_rot)
+    screen.clear()
+    image.write(_path)
 
   except:
     logging.error("Unable to create QR Code")
