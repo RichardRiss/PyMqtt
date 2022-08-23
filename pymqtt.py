@@ -20,6 +20,7 @@ try:
   import pyroute2.netlink
   import ipaddr
   import papirus
+  import RPi.GPIO as GPIO
 except ImportError:
   pass
 except AttributeError:
@@ -250,8 +251,8 @@ class PLC:
     self.error = 0
     self.amsnetid = cfg_plc.get('AMSNETID')
     if cfg_plc.get('wifi_connection'):
-      self._hostname = f'{ni.ifaddresses("wlan0")[ni.AF_INET][0]["addr"] }'
-      self._senderams =  f'{self._hostname}.1.1'
+      self._hostname = f'{ni.ifaddresses("wlan0")[ni.AF_INET][0]["addr"]}'
+      self._senderams = f'{self._hostname}.1.1'
     else:
       self._hostname = cfg_plc.get('ETH-IP').split('/')[0]
       self._senderams = cfg_plc.get('Sender-AMS')
@@ -486,10 +487,45 @@ def is_raspi():
   return _ret
 
 
+def button_event(channel):
+  try:
+    _rot = 0
+    eth_text = ni.ifaddresses("eth0")[ni.AF_INET][0]["addr"] if ni.AF_INET in ni.ifaddresses("eth0").keys() else 'down'
+    wifi_text = ni.ifaddresses("wlan0")[ni.AF_INET][0]["addr"] if ni.AF_INET in ni.ifaddresses("wlan0").keys() else 'down'
+    text = papirus.PapirusTextPos(False, rotation=_rot)
+    text.AddText(f'PyMQTT Connection:')
+    text.AddText(f'Wifi: {wifi_text}', 0, 40, size=16)
+    text.AddText(f'Ethernet: {eth_text}', 0, 80, size=16)
+    text.WriteAll()
+    time.sleep(3)
+    print_qr(get_qr_path(), _rot)
+
+  except:
+    logging.error(f'Error on Button event channel {channel}.')
+    logging.error(f'{sys.exc_info()[1]}')
+    logging.error(f'Error on line {sys.exc_info()[-1].tb_lineno}')
+
+
+def create_button_event() -> None:
+  _SW1 = 16
+  _SW2 = 26
+  _SW3 = 20
+  _SW4 = 21
+
+  GPIO.setmode(GPIO.BCM)
+  GPIO.setup(_SW1, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+  GPIO.add_event_detect(_SW1, GPIO.RISING, callback=button_event, bouncetime=100)
+
+
+def get_qr_path() -> str:
+  _path = './code.bmp'
+  return _path
+
+
 def create_qr(info: dict) -> None:
   try:
     _rot = 0
-    _path = './code.bmp'
+    _path = get_qr_path()
     _ip = ni.ifaddresses('wlan0')[ni.AF_INET][0]['addr']
     _port = info.get("Port", "1883")
     _topic = "/"
@@ -512,15 +548,23 @@ def create_qr(info: dict) -> None:
     qr.make(fit=True)
     img = qr.make_image(fill_color="black", back_color="white")
     img.save(_path)
-
-    # Show on PaPiRus Display
-    screen = papirus.Papirus(rotation=_rot)
-    image = papirus.PapirusImage(rotation=_rot)
-    screen.clear()
-    image.write(_path)
+    print_qr(_path, _rot)
 
   except:
     logging.error("Unable to create QR Code")
+    logging.error(f'{sys.exc_info()[1]}')
+    logging.error(f'Error on line {sys.exc_info()[-1].tb_lineno}')
+
+
+def print_qr(path, rot):
+  try:
+    # Show on PaPiRus Display
+    screen = papirus.Papirus(rotation=rot)
+    image = papirus.PapirusImage(rotation=rot)
+    screen.clear()
+    image.write(path)
+  except:
+    logging.error("Unable to print QR Code")
     logging.error(f'{sys.exc_info()[1]}')
     logging.error(f'Error on line {sys.exc_info()[-1].tb_lineno}')
 
@@ -538,6 +582,7 @@ def main():
     # Set device configuration
     if is_raspi():
       device_config(cfg.plc.get('ETH-IP'), cfg.plc)
+      create_button_event()
       create_qr(cfg.broker)
 
   except:
