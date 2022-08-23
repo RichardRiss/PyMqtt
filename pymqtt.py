@@ -2,20 +2,22 @@
 import datetime
 import json
 import logging
+import socket
 import time
 import os
 
 import paho.mqtt.client as mqtt
 import sys
 import pyads
-import pyroute2.netlink
 import yaml
 import threading
 from queue import Queue
 import qrcode
+import netifaces as ni
 
 try:
   from pyroute2 import iproute
+  import pyroute2.netlink
   import ipaddr
   import papirus
 except ImportError:
@@ -38,13 +40,11 @@ setup pi as wifi host
 8. Listen to write attempts
 '''
 
-_wlan0_ip = '192.168.1.1'
-_wlan0_mask = 24
 
 class YamlHandler:
   def __init__(self):
-    self.eth_ip = None
     self.struct = None
+    self._src_path = None
     self.val = None
     self.plc = None
     self.broker = None
@@ -58,11 +58,17 @@ class YamlHandler:
       self.src_folder = os.path.dirname(sys.executable)
     else:
       self.src_folder = os.path.dirname(os.path.abspath(__file__))
-    self.src_path = os.path.join(self.src_folder,"config.yaml")
+    self.src_path_device = os.path.join(self.src_folder, "device.yaml")
+    self.src_path_data = os.path.join(self.src_folder, "data.yaml")
 
-  def read(self, key):
+  def read(self, mode, key):
+    assert mode
     self._key = key
-    with open(self.src_path, 'r', encoding='UTF-8-sig') as f:
+    if mode == 'device':
+      self._src_path = self.src_path_device
+    elif mode == 'data':
+      self._src_path = self.src_path_data
+    with open(self._src_path, 'r', encoding='UTF-8-sig') as f:
       self._ret_val = yaml.safe_load(f)
       if self._ret_val is None:
         return False
@@ -70,8 +76,9 @@ class YamlHandler:
         try:
           return self._ret_val[self._key]
         except KeyError:
-          logging.error("Broken Key in Yaml File. Delete " + self.src_path + " and retry.")
+          logging.error("Broken Key in Yaml File. Delete " + self._src_path + " and retry.")
 
+  '''
   def add(self, key, value):
     try:
       assert key
@@ -86,18 +93,18 @@ class YamlHandler:
       logging.info(f"unable to add {key} to file")
       logging.error(f'{sys.exc_info()[1]}')
       logging.error(f'Error on line {sys.exc_info()[-1].tb_lineno}')
+  '''
 
   def get_data(self):
-    self.devname = self.read("DeviceName")
-    self.updatetime = self.read("UpdateTime")
-    self.broker = self.read("Broker")
-    self.plc = self.read("PLC")
-    self.eth_ip = self.read("ETH-IP")
+    self.devname = self.read('device', "DeviceName")
+    self.updatetime = self.read('device', "UpdateTime")
+    self.broker = self.read('device', "Broker")
+    self.plc = self.read('device', "PLC")
     if self.plc.get('Mode') == "TC2":
-      self.val = self.read("Data_TC2")
+      self.val = self.read('data', "Data_TC2")
     elif self.plc.get('Mode') == "TC3":
-      self.val = self.read("Data_TC3")
-      self.struct = self.read("Struct")
+      self.val = self.read('data', "Data_TC3")
+      self.struct = self.read('data', "Struct")
     else:
       raise KeyError
 
@@ -124,7 +131,7 @@ class Broker:
       self.client.on_connect = self.on_connect
       self.client.on_disconnect = self.on_disconnect
       self.client.on_message = self.on_message
-      self.client.connect(self.param.get("IP"), port=self.param.get("Port"), keepalive=60)
+      self.client.connect(self.param.get('IP'), port=self.param.get('Port'), keepalive=60)
       self.client.loop_start()
       self.set_online()
       self.client.will_set(f'//{self.devname}/TcIotCommunicator/Desc', payload=json.dumps(self._msg_offline), qos=2, retain=True)
@@ -230,7 +237,7 @@ class PLC:
     'WORD': pyads.PLCTYPE_WORD
   }
 
-  def __init__(self, amsnetid: str, ip: str, mode: str, mqttbroker: Broker):
+  def __init__(self, cfg_plc: dict, mqttbroker: Broker):
     self._symlist = None
     self._struct = None
     self._symdict = {}
@@ -238,30 +245,41 @@ class PLC:
     self.datasym = []
     self._datapoints = []
     self.connected = False
-    self.mode = mode
+    self.mode = cfg_plc.get('Mode')
     self._broker = mqttbroker
     self.error = 0
-    self.amsnetid = amsnetid
+    self.amsnetid = cfg_plc.get('AMSNETID')
+    if cfg_plc.get('wifi_connection'):
+      self._hostname = f'{ni.ifaddresses("wlan0")[ni.AF_INET][0]["addr"] }'
+      self._senderams =  f'{self._hostname}.1.1'
+    else:
+      self._hostname = cfg_plc.get('ETH-IP').split('/')[0]
+      self._senderams = cfg_plc.get('Sender-AMS')
+    self._user = cfg_plc.get('PLC-User')
+    self._pw = cfg_plc.get('PLC-PW')
+    self._routename = cfg_plc.get('Routename')
     self._port = None
-    self._ip = None
+    self._target_ip = '.'.join(self.amsnetid.split('.')[0:-2])
     if self.mode == 'TC2':
       self._port = 800
     elif self.mode == 'TC3':
       self._port = pyads.PORT_TC3PLC1
     if self._isWin:
       self.plc = pyads.Connection(self.amsnetid, self._port)
-      self.plc.set_timeout(3000)
     else:
-      self.plc = pyads.Connection(self.amsnetid, self._port, self._ip)
-      self.plc.set_timeout(3000)
-    self.plc.open()
+      pyads.open_port()
+      if pyads.get_local_address() is None:
+        pyads.set_local_address(self._senderams)
+      pyads.add_route_to_plc(self._senderams, self._hostname, self._target_ip, self._user, self._pw, route_name=self._routename)
+      pyads.close_port()
+      self.plc = pyads.Connection(self.amsnetid, self._port, self._target_ip)
 
   def check_connection(self):
     self.connected = False
-    if not self.plc.is_open:
-      self.plc.open()
     while not self.connected:
       try:
+        if not self.plc.is_open:
+          self.plc.open()
         self.plc.read_state()
         self._broker.clear_notification()
         self._broker.send_notification(f'Successfully established connection to {self.mode} PLC {self.amsnetid}')
@@ -270,8 +288,12 @@ class PLC:
         self._broker.send_notification(f'Unable to establish connection to {self.mode} PLC {self.amsnetid}')
         logging.info(f'Unable to establish connection to {self.mode} PLC {self.amsnetid}')
         time.sleep(5)
-      finally:
-        return self.connected
+      except socket.timeout:
+        pyads.set_local_address()
+        self._broker.send_notification(f'Timeout on connection to {self.mode} PLC {self.amsnetid}. Check Routing parameters.')
+        logging.info(f'Timeout on connection to {self.mode} PLC {self.amsnetid}. Check Routing parameters.')
+        time.sleep(5)
+    return self.connected
 
   def create_sym_links(self, data: list = None, struct: dict = None) -> list:
     self._data = data
@@ -423,7 +445,7 @@ def init_logging():
     level=log_level,
     force=True,
     handlers=[
-      logging.FileHandler(filename=os.path.join(folder,'debug.log'), mode='w', encoding='utf-8'),
+      logging.FileHandler(filename=os.path.join(folder, 'debug.log'), mode='w', encoding='utf-8'),
       logging.StreamHandler(sys.stdout)
     ])
 
@@ -434,6 +456,8 @@ def device_config(ip: str, plc: dict):
     mask = 24
   else:
     ethip, mask = ip.split('/')
+  _wlan0_ip = ni.ifaddresses('wlan0')[ni.AF_INET][0]['addr']
+  _wlan0_mask = mask_to_cidr(ni.ifaddresses('wlan0')[ni.AF_INET][0]['netmask'])
   with iproute.IPRoute() as ipr:
     index = ipr.link_lookup(ifname='eth0')[0]
     _wifi = ipaddr.IPNetwork(f'{_wlan0_ip}/{_wlan0_mask}')
@@ -466,7 +490,7 @@ def create_qr(info: dict) -> None:
   try:
     _rot = 0
     _path = './code.bmp'
-    _ip = info.get("IP", "")
+    _ip = ni.ifaddresses('wlan0')[ni.AF_INET][0]['addr']
     _port = info.get("Port", "1883")
     _topic = "/"
     _user = info.get("User", "")
@@ -501,6 +525,10 @@ def create_qr(info: dict) -> None:
     logging.error(f'Error on line {sys.exc_info()[-1].tb_lineno}')
 
 
+def mask_to_cidr(mask: str):
+  return sum(bin(int(x)).count('1') for x in mask.split('.'))
+
+
 def main():
   init_logging()
   try:
@@ -509,7 +537,7 @@ def main():
     cfg.get_data()
     # Set device configuration
     if is_raspi():
-      device_config(cfg.eth_ip, cfg.plc)
+      device_config(cfg.plc.get('ETH-IP'), cfg.plc)
       create_qr(cfg.broker)
 
   except:
@@ -531,7 +559,7 @@ def main():
 
   try:
     # Establish Connection to PLC
-    controller = PLC(cfg.plc.get("AMSNETID"), cfg.plc.get("IP"), cfg.plc.get('Mode'), mqttbroker)
+    controller = PLC(cfg.plc, mqttbroker)
     controller.check_connection()
     # Create symbolic Links to Data -> ignore invalid
     symlist = controller.create_sym_links(cfg.val, cfg.struct)

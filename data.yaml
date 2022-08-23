@@ -1,21 +1,4 @@
-﻿DeviceName: Fake_Controller
-
-UpdateTime: 1.0 #Unit 1s
-
-ETH-IP: 192.168.178.56/24   # static address for connection to plc, if None PLC IP X.X.X.1 is used 
-
-Broker:
-    IP: pihole.fritz.box    # localhost
-    Port: 1883
-    User:
-    Password:
-
-PLC:
-    IP: 192.168.178.57  # Only needed if script runs from linux device
-    AMSNETID: 192.168.178.57.1.1
-    Mode : TC3
-
-Data_TC2: #In TC2 only Memmory Variables are supported. f.e. MD4088 -> Offset 4088, Type: DINT
+﻿Data_TC2: #In TC2 only Memmory Variables are supported. f.e. MD4088 -> Offset 4088, Type: DINT
   - DisplayName: Kommando
     Offset: 4088
     Datatype: UDINT
