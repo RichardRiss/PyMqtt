@@ -257,8 +257,12 @@ class PLC:
     else:
       self._hostname = cfg_plc.get('ETH-IP').split('/')[0]
       self._senderams = cfg_plc.get('Sender-AMS')
-    self._user = cfg_plc.get('PLC-User')
-    self._pw = cfg_plc.get('PLC-PW')
+    self._user = cfg_plc.get('PLC-User', '')
+    if self._user is None:
+      self._user = ''
+    self._pw = cfg_plc.get('PLC-PW', '')
+    if self._pw is None:
+      self._pw = ''
     self._routename = cfg_plc.get('Routename')
     self._port = None
     self._target_ip = '.'.join(self.amsnetid.split('.')[0:-2])
@@ -273,7 +277,8 @@ class PLC:
 
   def check_connection(self):
     self.connected = False
-    self._route_added = False
+    # No need to add route to plc on TC2 devices
+    self._route_added = self.mode == 'TC2'
     self.plc.close()
     while not self.connected:
       try:
@@ -294,10 +299,14 @@ class PLC:
       except pyads.ADSError:
         self._broker.send_notification(f'Unable to establish connection to {self.mode} PLC {self.amsnetid}')
         logging.info(f'Unable to establish connection to {self.mode} PLC {self.amsnetid}')
+        logging.debug(f'{sys.exc_info()[1]}')
+        logging.debug(f'Error on line {sys.exc_info()[-1].tb_lineno}')
         time.sleep(5)
       except socket.timeout:
         self._broker.send_notification(f'Timeout on connection to {self.mode} PLC {self.amsnetid}. Check Routing parameters and PLC state.')
         logging.info(f'Timeout on connection to {self.mode} PLC {self.amsnetid}. Check Routing parameters and PLC state.')
+        logging.debug(f'{sys.exc_info()[1]}')
+        logging.debug(f'Error on line {sys.exc_info()[-1].tb_lineno}')
         time.sleep(5)
     return self.connected
 
