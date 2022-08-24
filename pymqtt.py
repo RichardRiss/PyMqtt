@@ -248,6 +248,7 @@ class PLC:
     self.connected = False
     self.mode = cfg_plc.get('Mode')
     self._broker = mqttbroker
+    self._route_added = False
     self.error = 0
     self.amsnetid = cfg_plc.get('AMSNETID')
     if cfg_plc.get('wifi_connection'):
@@ -268,17 +269,22 @@ class PLC:
     if self._isWin:
       self.plc = pyads.Connection(self.amsnetid, self._port)
     else:
-      pyads.open_port()
-      if pyads.get_local_address() is None:
-        pyads.set_local_address(self._senderams)
-      pyads.add_route_to_plc(self._senderams, self._hostname, self._target_ip, self._user, self._pw, route_name=self._routename)
-      pyads.close_port()
       self.plc = pyads.Connection(self.amsnetid, self._port, self._target_ip)
 
   def check_connection(self):
     self.connected = False
+    self._route_added = False
+    self.plc.close()
     while not self.connected:
       try:
+        if not self._route_added and not self._isWin:
+          pyads.open_port()
+          if pyads.get_local_address() is None:
+            pyads.set_local_address(self._senderams)
+          self._route_added = pyads.add_route_to_plc(self._senderams, self._hostname, self._target_ip, self._user, self._pw, route_name=self._routename)
+          if self._route_added:
+            self.plc = pyads.Connection(self.amsnetid, self._port, self._target_ip)
+          pyads.close_port()
         if not self.plc.is_open:
           self.plc.open()
         self.plc.read_state()
@@ -290,15 +296,17 @@ class PLC:
         logging.info(f'Unable to establish connection to {self.mode} PLC {self.amsnetid}')
         time.sleep(5)
       except socket.timeout:
-        pyads.set_local_address()
-        self._broker.send_notification(f'Timeout on connection to {self.mode} PLC {self.amsnetid}. Check Routing parameters.')
-        logging.info(f'Timeout on connection to {self.mode} PLC {self.amsnetid}. Check Routing parameters.')
+        self._broker.send_notification(f'Timeout on connection to {self.mode} PLC {self.amsnetid}. Check Routing parameters and PLC state.')
+        logging.info(f'Timeout on connection to {self.mode} PLC {self.amsnetid}. Check Routing parameters and PLC state.')
         time.sleep(5)
     return self.connected
 
-  def create_sym_links(self, data: list = None, struct: dict = None) -> list:
+  def set_symlinks(self, data: list = None, struct: dict = None) -> list:
     self._data = data
     self._struct = struct
+    return self.create_symlinks()
+
+  def create_symlinks(self) -> list:
     self.datasym = []
     for _var in self._data:
       self._symdict = {}
@@ -393,6 +401,7 @@ class TimedThread:
       if self._connected:
         logging.info(f'Successfully reconnected to controller {self.plc.amsnetid}')
         self.broker.set_online()
+        self.symlist = self.plc.create_symlinks()
         self._start_time = time.time()
 
   def stop(self):
@@ -487,7 +496,7 @@ def is_raspi():
   return _ret
 
 
-def button_event(channel):
+def button_event(ctrl: PLC):
   try:
     _rot = 0
     eth_text = ni.ifaddresses("eth0")[ni.AF_INET][0]["addr"] if ni.AF_INET in ni.ifaddresses("eth0").keys() else 'down'
@@ -496,17 +505,18 @@ def button_event(channel):
     text.AddText(f'PyMQTT Connection:')
     text.AddText(f'Wifi: {wifi_text}', 0, 40, size=16)
     text.AddText(f'Ethernet: {eth_text}', 0, 80, size=16)
+    text.AddText(f'Controller Connection: {"connected" if ctrl.connected else "disconnected"}', 0, 120, size=16)
     text.WriteAll()
     time.sleep(3)
     print_qr(get_qr_path(), _rot)
 
   except:
-    logging.error(f'Error on Button event channel {channel}.')
+    logging.error(f'Error on Button event.')
     logging.error(f'{sys.exc_info()[1]}')
     logging.error(f'Error on line {sys.exc_info()[-1].tb_lineno}')
 
 
-def create_button_event() -> None:
+def create_button_event(ctrl: PLC) -> None:
   _SW1 = 16
   _SW2 = 26
   _SW3 = 20
@@ -514,7 +524,7 @@ def create_button_event() -> None:
 
   GPIO.setmode(GPIO.BCM)
   GPIO.setup(_SW1, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
-  GPIO.add_event_detect(_SW1, GPIO.RISING, callback=button_event, bouncetime=100)
+  GPIO.add_event_detect(_SW1, GPIO.RISING, callback=lambda x: button_event(ctrl), bouncetime=100)
 
 
 def get_qr_path() -> str:
@@ -559,9 +569,7 @@ def create_qr(info: dict) -> None:
 def print_qr(path, rot):
   try:
     # Show on PaPiRus Display
-    screen = papirus.Papirus(rotation=rot)
     image = papirus.PapirusImage(rotation=rot)
-    screen.clear()
     image.write(path)
   except:
     logging.error("Unable to print QR Code")
@@ -582,7 +590,6 @@ def main():
     # Set device configuration
     if is_raspi():
       device_config(cfg.plc.get('ETH-IP'), cfg.plc)
-      create_button_event()
       create_qr(cfg.broker)
 
   except:
@@ -605,9 +612,11 @@ def main():
   try:
     # Establish Connection to PLC
     controller = PLC(cfg.plc, mqttbroker)
+    # Create event for Buttons press
+    create_button_event(controller)
     controller.check_connection()
     # Create symbolic Links to Data -> ignore invalid
-    symlist = controller.create_sym_links(cfg.val, cfg.struct)
+    symlist = controller.set_symlinks(cfg.val, cfg.struct)
     # Give Broker Write Access
     mqttbroker.symlist = symlist
   except:
