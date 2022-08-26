@@ -13,7 +13,8 @@ ToDo:
  - create QR Code on runup -> done
  - print qr code to e-ink display -> done
  - stability test on Pi -> done
- - setup pi as wifi host -> done
+ - setup pi as wifi host -> done (autohotspot script)
+ - add temperature to debug screen
  - broker and controller security
  - ability to connect to multiple devices
  - make script pretty again

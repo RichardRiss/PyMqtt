@@ -1,0 +1,165 @@
+#!/bin/bash
+
+function parse_yaml {
+   local prefix=$2
+   local s='[[:space:]]*' w='[a-zA-Z0-9_]*' fs=$(echo @|tr @ '\034')
+   sed -ne "s|^\($s\):|\1|" \
+        -e "s|^\($s\)\($w\)$s:$s[\"']\(.*\)[\"']$s\$|\1$fs\2$fs\3|p" \
+        -e "s|^\($s\)\($w\)$s:$s\(.*\)$s\$|\1$fs\2$fs\3|p"  $1 |
+   awk -F$fs '{
+      indent = length($1)/2;
+      vname[indent] = $2;
+      for (i in vname) {if (i > indent) {delete vname[i]}}
+      if (length($3) > 0) {
+         vn=""; for (i=0; i<indent; i++) {vn=(vn)(vname[i])("_")}
+	 gsub(/#.*$/, "", $3); 
+	 gsub(/^[ \t]+/, "", $3); gsub(/[ \t]+$/, "", $3);
+         printf("%s%s%s=\"%s\"\n", "'$prefix'",vn, $2, $3);
+      }
+   }'
+}
+
+
+
+createAdHocNetwork()
+{
+    echo "Creating Hotspot"
+    ip link set dev "$wifidev" down
+    ip a add 192.168.1.1/24 brd + dev "$wifidev"
+    ip link set dev "$wifidev" up
+    dhcpcd -k "$wifidev" >/dev/null 2>&1
+    if iptables 2>&1 | grep 'no command specified' ; then
+    	iptables -t nat -A POSTROUTING -o "$ethdev" -j MASQUERADE
+    	iptables -A FORWARD -i "$ethdev" -o "$wifidev" -m state --state RELATED,ESTABLISHED -j ACCEPT
+    	iptables -A FORWARD -i "$wifidev" -o "$ethdev" -j ACCEPT
+    elif nft 2>&1 | grep 'no command specified' ; then
+        nft add table inet ap
+	nft add chain inet ap rthrough { type nat hook postrouting priority 0 \; policy accept \; }
+	nft add rule inet ap rthrough oifname "$ethdev" masquerade
+	nft add chain inet ap fward { type filter hook forward priority 0 \; policy accept \; }
+	nft add rule inet ap fward iifname "$ethdev" oifname "$wifidev" ct state established,related accept
+	nft add rule inet ap fward iifname "$wifidev" oifname "$ethdev" accept
+    fi
+    systemctl start dnsmasq
+    systemctl start hostapd
+    echo 1 > /proc/sys/net/ipv4/ip_forward
+}
+
+KillHotspot()
+{
+    echo "Shutting Down Hotspot"
+    ip link set dev "$wifidev" down
+    systemctl stop hostapd
+    systemctl stop dnsmasq
+    if iptables 2>&1 | grep 'no command specified' ; then
+        iptables -D FORWARD -i "$ethdev" -o "$wifidev" -m state --state RELATED,ESTABLISHED -j ACCEPT
+        iptables -D FORWARD -i "$wifidev" -o "$ethdev" -j ACCEPT
+    elif nft 2>&1 | grep 'no command specified' ; then
+        nft delete table inet ap
+    fi
+    echo 0 > /proc/sys/net/ipv4/ip_forward
+    ip addr flush dev "$wifidev"
+    ip link set dev "$wifidev" up
+    dhcpcd  -n "$wifidev" >/dev/null 2>&1
+}
+
+
+ChkWifiUp()
+{
+	echo "Checking WiFi connection ok"
+        sleep 20 #give time for connection to be completed to router
+	if ! wpa_cli -i "$wifidev" status | grep 'ip_address' >/dev/null 2>&1
+        then #Failed to connect to wifi (check your wifi settings, password etc)
+	       echo 'Wifi failed to connect, falling back to Hotspot.'
+               wpa_cli terminate "$wifidev" >/dev/null 2>&1
+	       createAdHocNetwork
+	fi
+}
+
+
+chksys()
+{
+    #After some system updates hostapd gets masked using Raspbian Buster, and above. This checks and fixes  
+    #the issue and also checks dnsmasq is ok so the hotspot can be generated.
+    #Check Hostapd is unmasked and disabled
+    if systemctl -all list-unit-files hostapd.service | grep "hostapd.service masked" >/dev/null 2>&1 ;then
+	systemctl unmask hostapd.service >/dev/null 2>&1
+    fi
+    if systemctl -all list-unit-files hostapd.service | grep "hostapd.service enabled" >/dev/null 2>&1 ;then
+	systemctl disable hostapd.service >/dev/null 2>&1
+	systemctl stop hostapd >/dev/null 2>&1
+    fi
+    #Check dnsmasq is disabled
+    if systemctl -all list-unit-files dnsmasq.service | grep "dnsmasq.service masked" >/dev/null 2>&1 ;then
+	systemctl unmask dnsmasq >/dev/null 2>&1
+    fi
+    if systemctl -all list-unit-files dnsmasq.service | grep "dnsmasq.service enabled" >/dev/null 2>&1 ;then
+	systemctl disable dnsmasq >/dev/null 2>&1
+	systemctl stop dnsmasq >/dev/null 2>&1
+    fi
+}
+
+
+
+
+
+wifidev="wlan0" #device name to use. Default is wlan0.
+ethdev="eth0" #Ethernet port to use with IP tables
+ethip=192.168.2.1/24
+
+IFSdef=$IFS
+cnt=0
+
+# Get Wifi Interface name
+wpassid=$(awk '/ssid="/{ print $0 }' /etc/wpa_supplicant/wpa_supplicant.conf | awk -F'ssid=' '{ print $2 }' | sed 's/\r//g'| awk 'BEGIN{ORS=","} {print}' | sed 's/\"/''/g' | sed 's/,$//')
+IFS=","
+ssids=($wpassid)
+IFS=$IFSdef #reset back to defaults
+
+
+# Parse yaml config file
+eval $(parse_yaml /home/pi/pymqtt/device.yaml)
+
+
+
+# Set Ethernet IP
+if [ -z ${PLC__ETHIP+x} ];
+then 
+	echo "Key PLC.ETHIP doesn't exist";
+else
+	echo "Key PLC.ETHIP found: " $PLC__ETHIP;
+	ethip=$PLC__ETHIP
+fi
+
+ip link set dev "$ethdev" down
+ip a add "$ethip" brd + dev "$ethdev"
+ip link set dev "$ethdev" up
+echo "Ethernet set to IP: " $ethip
+
+
+# Start Adhoc Network or connect to wifi
+if [ -z ${PLC__wifi_connection+x} ];
+then echo "Key PLC.wifi_connection doesn't exist";
+else if [ "$PLC__wifi_connection" = "true" ] || [ "$PLC__wifi_connection" = "True" ]; 
+then
+  	echo "Connect to Wlan Router";
+ 	echo 0 > /proc/sys/net/ipv4/ip_forward #deactivate ip forwarding
+	KillHotspot
+	echo "Hotspot Deactivated, Bringing Wifi Up"
+	wpa_supplicant -B -i "$wifidev" -c /etc/wpa_supplicant/wpa_supplicant.conf >/dev/null 2>&1
+	ChkWifiUp
+	#python3 /home/pi/pymqtt/pymqtt.py
+	echo "Fin"
+else 
+	echo "Cleaning wifi files"
+        wpa_cli terminate >/dev/null 2>&1	
+	ip addr flush "$wifidev"
+        ip link set dev "$wifidev" down
+        rm -r /var/run/wpa_supplicant >/dev/null 2>&1
+	echo "Activate Hotspot"
+	createAdHocNetwork
+	#python3 /home/pi/pymqtt/pymqtt.py
+	echo "Fin"
+
+fi
+fi

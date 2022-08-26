@@ -1,0 +1,8 @@
+#!/bin/bash
+
+echo Finding PID
+pid=$(ps aux|pgrep python)
+echo "Found PID: "$pid
+cd /proc/$pid/fd
+echo "Attaching to PID"
+tail -f 3

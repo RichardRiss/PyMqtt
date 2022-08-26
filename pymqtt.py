@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 import datetime
 import json
 import logging
@@ -55,10 +55,7 @@ class YamlHandler:
     self._value = None
     self._ret_val = None
     self._key = None
-    if getattr(sys, 'frozen', False):
-      self.src_folder = os.path.dirname(sys.executable)
-    else:
-      self.src_folder = os.path.dirname(os.path.abspath(__file__))
+    self.src_folder = get_filepath()
     self.src_path_device = os.path.join(self.src_folder, "device.yaml")
     self.src_path_data = os.path.join(self.src_folder, "data.yaml")
 
@@ -255,7 +252,7 @@ class PLC:
       self._hostname = f'{ni.ifaddresses("wlan0")[ni.AF_INET][0]["addr"]}'
       self._senderams = f'{self._hostname}.1.1'
     else:
-      self._hostname = cfg_plc.get('ETH-IP').split('/')[0]
+      self._hostname = cfg_plc.get('ETHIP').split('/')[0]
       self._senderams = cfg_plc.get('Sender-AMS')
     self._user = cfg_plc.get('PLC-User', '')
     if self._user is None:
@@ -469,30 +466,6 @@ def init_logging():
     ])
 
 
-def device_config(ip: str, plc: dict):
-  if ip is None:
-    ethip = '.'.join(plc.get('IP').split('.')[0:-1]) + '.1'
-    mask = 24
-  else:
-    ethip, mask = ip.split('/')
-  _wlan0_ip = ni.ifaddresses('wlan0')[ni.AF_INET][0]['addr']
-  _wlan0_mask = mask_to_cidr(ni.ifaddresses('wlan0')[ni.AF_INET][0]['netmask'])
-  with iproute.IPRoute() as ipr:
-    index = ipr.link_lookup(ifname='eth0')[0]
-    _wifi = ipaddr.IPNetwork(f'{_wlan0_ip}/{_wlan0_mask}')
-    _eth = ipaddr.IPNetwork(f'{ethip}/{mask}')
-    if not _wifi.overlaps(_eth):
-      try:
-        # sudo setcap cap_net_admin,cap_net_raw+eip /usr/bin/python3.9
-        ipr.addr('add', index, address=ethip, mask=int(mask))
-        logging.info(f'device address set to {ethip}/{mask}')
-      except pyroute2.netlink.NetlinkError as e:
-        if e.code == 17:
-          logging.info(f'Tryed to set device IP to {ethip}. Address is already used.')
-    else:
-      logging.info(f'address conflict between eth0({ethip} and wlan0({_wlan0_ip}). Ethernet IP was not set.)')
-
-
 def is_raspi():
   _ret = False
   try:
@@ -517,7 +490,7 @@ def button_event(ctrl: PLC):
     text.AddText(f'Controller Connection: {"connected" if ctrl.connected else "disconnected"}', 0, 120, size=16)
     text.WriteAll()
     time.sleep(3)
-    print_qr(get_qr_path(), _rot)
+    print_qr(_rot)
 
   except:
     logging.error(f'Error on Button event.')
@@ -537,14 +510,13 @@ def create_button_event(ctrl: PLC) -> None:
 
 
 def get_qr_path() -> str:
-  _path = './code.bmp'
+  _path = os.path.join(get_filepath(), 'code.bmp')
   return _path
 
 
 def create_qr(info: dict) -> None:
   try:
     _rot = 0
-    _path = get_qr_path()
     _ip = ni.ifaddresses('wlan0')[ni.AF_INET][0]['addr']
     _port = info.get("Port", "1883")
     _topic = "/"
@@ -566,8 +538,8 @@ def create_qr(info: dict) -> None:
     qr.add_data(_data)
     qr.make(fit=True)
     img = qr.make_image(fill_color="black", back_color="white")
-    img.save(_path)
-    print_qr(_path, _rot)
+    img.save(get_qr_path())
+    print_qr(_rot)
 
   except:
     logging.error("Unable to create QR Code")
@@ -575,19 +547,23 @@ def create_qr(info: dict) -> None:
     logging.error(f'Error on line {sys.exc_info()[-1].tb_lineno}')
 
 
-def print_qr(path, rot):
+def print_qr(rot):
   try:
     # Show on PaPiRus Display
+    _path = get_qr_path()
     image = papirus.PapirusImage(rotation=rot)
-    image.write(path)
+    image.write(_path)
   except:
     logging.error("Unable to print QR Code")
     logging.error(f'{sys.exc_info()[1]}')
     logging.error(f'Error on line {sys.exc_info()[-1].tb_lineno}')
 
 
-def mask_to_cidr(mask: str):
-  return sum(bin(int(x)).count('1') for x in mask.split('.'))
+def get_filepath():
+  if getattr(sys, 'frozen', False):
+    return os.path.dirname(sys.executable)
+  else:
+    return os.path.dirname(os.path.abspath(__file__))
 
 
 def main():
@@ -596,9 +572,7 @@ def main():
     # Read Yaml File
     cfg = YamlHandler()
     cfg.get_data()
-    # Set device configuration
     if is_raspi():
-      device_config(cfg.plc.get('ETH-IP'), cfg.plc)
       create_qr(cfg.broker)
 
   except:
