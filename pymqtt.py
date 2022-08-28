@@ -20,6 +20,7 @@ try:
   import pyroute2.netlink
   import ipaddr
   import papirus
+  from papirus import LM75B
   import RPi.GPIO as GPIO
 except ImportError:
   pass
@@ -481,13 +482,19 @@ def is_raspi():
 def button_event(ctrl: PLC):
   try:
     _rot = 0
+    # get temperature
+    _sensor = LM75B()
+    _tempC = '{c:.2f}'.format(c=_sensor.getTempCFloat()) + u" \u00b0" + 'C'
+    # get IPs
     eth_text = ni.ifaddresses("eth0")[ni.AF_INET][0]["addr"] if ni.AF_INET in ni.ifaddresses("eth0").keys() else 'down'
     wifi_text = ni.ifaddresses("wlan0")[ni.AF_INET][0]["addr"] if ni.AF_INET in ni.ifaddresses("wlan0").keys() else 'down'
+    #Write text
     text = papirus.PapirusTextPos(False, rotation=_rot)
     text.AddText(f'PyMQTT Connection:')
-    text.AddText(f'Wifi: {wifi_text}', 0, 40, size=16)
-    text.AddText(f'Ethernet: {eth_text}', 0, 80, size=16)
-    text.AddText(f'Controller Connection: {"connected" if ctrl.connected else "disconnected"}', 0, 120, size=16)
+    text.AddText(f'Wifi: {wifi_text}', 0, 30, size=16)
+    text.AddText(f'Ethernet: {eth_text}', 0, 60, size=16)
+    text.AddText(f'Controller Connection: {"connected" if ctrl.connected else "disconnected"}', 0, 90, size=16)
+    text.AddText(f'Temperature: {_tempC}', 0, 140, size=16)
     text.WriteAll()
     time.sleep(3)
     print_qr(_rot)
