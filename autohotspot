@@ -99,7 +99,33 @@ chksys()
     fi
 }
 
+setup_static()
+{
+	echo "Setting Ethernet up with static IP."
+	ip link set dev "$ethdev" down
+	ip a add "$ethip" brd + dev "$ethdev"
+	ip link set dev "$ethdev" up
+	echo "Ethernet set to IP: " $ethip
+}
 
+
+setup_dhcp_client()
+{
+	
+	echo "Setting Ethernet up as DHCP Client.";
+	ip link set dev "$ethdev" down
+	dhclient -r "$ethdev"	
+	dhclient "$ethdev"
+	if !  ip a s "$ethdev" | grep 'inet' >/dev/null 2>&1;
+	then
+		echo "Failed to connect to DHCP Server. Fallback to static IP."
+		ethip=192.168.2.1/24
+		setup_static
+	else
+		ethip=`ip addr show eth0| awk '$1 == "inet" {gsub(/\/.*$/, "", $2); print $2}'`
+		echo "Connected to DHCP Server. IP: " $ethip
+	fi	
+}
 
 
 
@@ -131,10 +157,13 @@ else
 	ethip=$PLC__ETHIP
 fi
 
-ip link set dev "$ethdev" down
-ip a add "$ethip" brd + dev "$ethdev"
-ip link set dev "$ethdev" up
-echo "Ethernet set to IP: " $ethip
+if [ "$ethip" = "DHCP" ];
+then 
+	setup_dhcp_client
+else
+	setup_static
+
+fi
 
 
 # Start Adhoc Network or connect to wifi

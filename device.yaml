@@ -14,6 +14,6 @@ PLC:
     PLC-PW: ''
     Mode : TC3
     Routename: PyMQTT
-    ETHIP: 192.168.178.56/24   # static address for connection to plc, if None PLC IP X.X.X.1 is used 
+    ETHIP: 192.168.178.56/24    # static address for connection to plc, if None PLC IP X.X.X.1 is used, use DHCP to setup DHCP Client
     Sender-AMS: 1.2.3.4.1.1     # AMS ID for connection to plc
     wifi_connection: false      # Debug Option: Connection to controller over wifi (default: false)

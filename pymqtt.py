@@ -253,7 +253,7 @@ class PLC:
       self._hostname = f'{ni.ifaddresses("wlan0")[ni.AF_INET][0]["addr"]}'
       self._senderams = f'{self._hostname}.1.1'
     else:
-      self._hostname = cfg_plc.get('ETHIP').split('/')[0]
+      self._hostname = f'{ni.ifaddresses("eth0")[ni.AF_INET][0]["addr"]}'
       self._senderams = cfg_plc.get('Sender-AMS')
     self._user = cfg_plc.get('PLC-User', '')
     if self._user is None:
@@ -306,6 +306,12 @@ class PLC:
         logging.debug(f'{sys.exc_info()[1]}')
         logging.debug(f'Error on line {sys.exc_info()[-1].tb_lineno}')
         time.sleep(5)
+      except OSError:
+        self._broker.send_notification(f'Network is unreachable. {self._target_ip}. Check network status.')
+        logging.info(f'Network is unreachable. {self._target_ip}. Check network status.')
+        logging.debug(f'{sys.exc_info()[1]}')
+        logging.debug(f'Error on line {sys.exc_info()[-1].tb_lineno}')
+        time.sleep(5)
     return self.connected
 
   def set_symlinks(self, data: list = None, struct: dict = None) -> list:
@@ -313,17 +319,25 @@ class PLC:
     self._struct = struct
     return self.create_symlinks()
 
+  def get_offset(self, offset:float) -> int:
+    _offset = str(offset).split('.')
+    _byteval = int(_offset[0])
+    _bitval = int(_offset[1])
+    _retval = int(_byteval * 8 + _bitval)
+    return _retval
+
+
   def create_symlinks(self) -> list:
     self.datasym = []
     for _var in self._data:
       self._symdict = {}
       try:
         if self.mode == 'TC2':
-          if isinstance(_var.get('Offset'), int) and _var.get('Datatype') in self._datatype:
+          if (isinstance(_var.get('Offset'),int) or isinstance(_var.get('Offset'),float)) and _var.get('Datatype') in self._datatype:
             self._symdict = _var.copy()
             self._symdict['symlink'] = self.plc.get_symbol(
               index_group=pyads.INDEXGROUP_MEMORYBIT if _var.get('Datatype') in ['BOOL', 'BIT'] else pyads.INDEXGROUP_MEMORYBYTE,
-              index_offset=_var.get('Offset'),
+              index_offset= self.get_offset(_var.get('Offset')) if _var.get('Datatype') in ['BOOL', 'BIT'] else _var.get('Offset'),
               plc_datatype=self._datatype.get(_var.get('Datatype')))
             self.datasym.append(self._symdict)
         elif self.mode == 'TC3':

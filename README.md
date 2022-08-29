@@ -15,6 +15,7 @@ ToDo:
  - stability test on Pi -> done
  - setup pi as wifi host -> done (autohotspot script)
  - add temperature to debug screen -> done
+ - function to connect purely over ethernet
  - broker and controller security
  - ability to connect to multiple devices
  - make script pretty again
